@@ -682,6 +682,18 @@ export default function App() {
     }
   };
   
+  // [修复缺失] 补回了专门用于更新菜单技能数据的函数！
+  const updateMenuData = (charId, menuId, index, field, value) => {
+    setParty(party.map(p => {
+      if (p.id !== charId) return p;
+      const newMenus = { ...p.menus };
+      const newCategory = [...newMenus[menuId]];
+      newCategory[index] = { ...newCategory[index], [field]: value };
+      newMenus[menuId] = newCategory;
+      return { ...p, menus: newMenus };
+    }));
+  };
+
   const addMenuItem = () => {
     const newItem = { id: `item_${Date.now()}`, text: '新技能', color: '#ffffff', size: 22, desc: '', target: 'none', actionType: 'none', value: 0, mpCost: 0, accuracy: 100, effect: 'none', duration: 0, subMenu: 'none' };
     setParty(party.map(p => p.id === editingMenuCharId ? { ...p, menus: { ...p.menus, [editingMenuId]: [...p.menus[editingMenuId], newItem] } } : p));
