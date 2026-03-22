@@ -233,10 +233,12 @@ const createDefaultMenus = () => ({
   ],
   skills: [
     { id: `s1_${Date.now()}`, text: '重击', color: '#ffea00', size: 22, desc: '消耗MP造成大量伤害', target: 'manual_enemy', actionType: 'damage', value: 40, mpCost: 20, accuracy: 90, effect: 'lunge', duration: 1, subMenu: 'none' },
+    { id: `s2_${Date.now()}`, text: '战吼', color: '#ff5500', size: 22, desc: '提升我方全体攻击力', target: 'party_all', actionType: 'buff_atk', value: 15, mpCost: 15, accuracy: 100, effect: 'flash', duration: 1, subMenu: 'none' },
     { id: `s4_${Date.now()}`, text: '返回', color: '#888888', size: 20, desc: '返回上一层', target: 'none', actionType: 'none', value: 0, mpCost: 0, accuracy: 100, effect: 'none', duration: 0, subMenu: 'main' },
   ],
   items: [
     { id: `i1_${Date.now()}`, text: '回复药', color: '#ff5555', size: 22, desc: '恢复目标HP', target: 'manual_party', actionType: 'heal', value: 50, mpCost: 0, accuracy: 100, effect: 'float-fast', duration: 1, subMenu: 'none' },
+    { id: `i2_${Date.now()}`, text: '破甲榴弹', color: '#aaaaaa', size: 22, desc: '降低敌方全体防御', target: 'enemy_all', actionType: 'debuff_def', value: 10, mpCost: 0, accuracy: 85, effect: 'shake', duration: 1, subMenu: 'none' },
     { id: `i3_${Date.now()}`, text: '返回', color: '#888888', size: 20, desc: '返回上一层', target: 'none', actionType: 'none', value: 0, mpCost: 0, accuracy: 100, effect: 'none', duration: 0, subMenu: 'main' },
   ]
 });
@@ -254,12 +256,13 @@ export default function App() {
   const [title, setTitle] = useState({ show: true, text: "RPG 战斗引擎" });
   
   const [globalRules, setGlobalRules] = useState({ defendReduction: 50, damageVariance: 10, hpLabel: 'HP', mpLabel: 'MP' });
+  const [turnSettings, setTurnSettings] = useState({ playerActions: 2, bossActions: 1 });
 
   const [boss, setBoss] = useState({
     name: "Boss", hp: 1000, maxHp: 1000, atk: 45, def: 15, anim: 'idle-breathe', isDefending: false, phase: 1,
     media1: { url: './assets/boss.png', type: 'image', x: 0, y: 0, scale: 1 }, 
     media2: { url: './assets/boss_alt.png', type: 'image', x: 0, y: 0, scale: 1 },
-    media2Threshold: 50, transitionType: 'glitch', fx: { glitch: false, invert: false, sepia: false },
+    media2Threshold: 50, transitionType: 'glitch', fx: { glitch: false, invert: false, sepia: false }, interruptAtPhase2: true,
     aiRules: [
       { id: 'ai1', condition: 'hp_below', threshold: 30, text: '重攻击', actionType: 'damage', value: 120, accuracy: 90, target: 'party_all', effect: 'flash', duration: 1.5 },
       { id: 'ai2', condition: 'always', threshold: 0, text: '普通攻击', actionType: 'damage', value: 50, accuracy: 95, target: 'party_random', effect: 'lunge-down', duration: 0.8 }
@@ -281,10 +284,12 @@ export default function App() {
   const [editingMenuCharId, setEditingMenuCharId] = useState(1);
   const [editingMenuId, setEditingMenuId] = useState('main'); 
 
-  const [turnChain, setTurnChain] = useState(['party_1', 'party_2', 'party_3', 'party_4', 'boss']);
-  const [currentTurnIdx, setCurrentTurnIdx] = useState(0);
+  const [battleState, setBattleState] = useState({ phase: 'player', actionCount: 0, activePartyId: 1 });
   const [isProcessingAction, setIsProcessingAction] = useState(false);
-  const activeTurnEntity = turnChain[currentTurnIdx] || 'none';
+  const [targetingAction, setTargetingAction] = useState(null);
+
+  const activeTurnEntity = battleState.phase === 'boss' ? 'boss' : `party_${battleState.activePartyId}`;
+  const isPlayerTurn = battleState.phase === 'player' && !isProcessingAction;
 
   const [combatTexts, setCombatTexts] = useState([]); 
   const [tempEffects, setTempEffects] = useState({});
@@ -293,15 +298,27 @@ export default function App() {
   const [phaseTransitions, setPhaseTransitions] = useState({});
   const timeoutRefs = useRef({});
 
+  // 确保活着的角色被选中
+  useEffect(() => {
+    if (battleState.phase === 'player' && !isProcessingAction) {
+       const currentP = party.find(p => p.id === battleState.activePartyId);
+       if (!currentP || currentP.hp <= 0) {
+           const firstAlive = party.find(p => p.hp > 0);
+           if (firstAlive && firstAlive.id !== battleState.activePartyId) {
+               setBattleState(s => ({ ...s, activePartyId: firstAlive.id }));
+               setCurrentMenuId('main');
+           }
+       }
+    }
+  }, [party, battleState.phase, battleState.activePartyId, isProcessingAction]);
+
   let activeActorMenus = { main:[], skills:[], items:[] };
   if (activeTurnEntity.startsWith('party_')) {
-      const pId = parseInt(activeTurnEntity.split('_')[1]);
-      const p = party.find(x => x.id === pId);
+      const p = party.find(x => x.id === battleState.activePartyId);
       if (p) activeActorMenus = p.menus;
   }
   const currentMenuItems = activeActorMenus[currentMenuId] || [];
   const hoveredItemData = currentMenuItems.find(i => i.id === hoveredItemId);
-  const isPlayerTurn = activeTurnEntity.startsWith('party_') && !isProcessingAction;
 
   // --- Logic Processing ---
   const showCombatText = (targetId, amountStr, type) => {
@@ -322,7 +339,7 @@ export default function App() {
   };
 
   const resetBattle = () => {
-    setCurrentTurnIdx(0);
+    setBattleState({ phase: 'player', actionCount: 0, activePartyId: 1 });
     setCurrentMenuId('main');
     setTargetingAction(null);
     setGlobalMessage("战斗已重置");
@@ -339,29 +356,34 @@ export default function App() {
     setTimeout(() => setGlobalMessage(""), 1500);
   };
 
-  const advanceTurn = () => {
-    let nextIdx = (currentTurnIdx + 1) % turnChain.length;
-    let safeGuard = 0;
-    while(safeGuard < turnChain.length) {
-       const ent = turnChain[nextIdx];
-       if (ent === 'boss' && boss.hp > 0) break;
-       if (ent.startsWith('party_')) {
-          const pId = parseInt(ent.split('_')[1]);
-          const p = party.find(x => x.id === pId);
-          if (p && p.hp > 0) break;
-       }
-       nextIdx = (nextIdx + 1) % turnChain.length;
-       safeGuard++;
-    }
-    
-    const nextEntity = turnChain[nextIdx];
-    if (nextEntity === 'boss') setBoss(b => ({...b, isDefending: false}));
-    else if (nextEntity.startsWith('party_')) {
-       const pId = parseInt(nextEntity.split('_')[1]);
-       setParty(pts => pts.map(p => p.id === pId ? {...p, isDefending: false} : p));
+  const advanceTurn = (forceBossInterrupt = false) => {
+    if (forceBossInterrupt) {
+        setBattleState(s => ({ ...s, phase: 'boss', actionCount: 0 }));
+        setCurrentMenuId('main');
+        setIsProcessingAction(false);
+        setTargetingAction(null);
+        setGlobalMessage("Boss 强行介入了回合！");
+        return;
     }
 
-    setCurrentTurnIdx(nextIdx);
+    if (battleState.phase === 'player') {
+        const nextCount = battleState.actionCount + 1;
+        if (nextCount >= turnSettings.playerActions) {
+            setBattleState(s => ({ ...s, phase: 'boss', actionCount: 0 }));
+            setBoss(b => ({ ...b, isDefending: false }));
+        } else {
+            setBattleState(s => ({ ...s, actionCount: nextCount }));
+        }
+    } else {
+        const nextCount = battleState.actionCount + 1;
+        if (nextCount >= turnSettings.bossActions) {
+            setBattleState(s => ({ ...s, phase: 'player', actionCount: 0 }));
+            setParty(pts => pts.map(p => ({ ...p, isDefending: false })));
+        } else {
+            setBattleState(s => ({ ...s, actionCount: nextCount }));
+        }
+    }
+
     setCurrentMenuId('main');
     setIsProcessingAction(false);
     setTargetingAction(null);
@@ -383,6 +405,15 @@ export default function App() {
       newParty = newParty.map(p => p.id === aId ? { ...p, mp: Math.max(0, p.mp - (action.mpCost||0)) } : p);
     }
 
+    const applyBuffDebuff = (entity, tId, actType, amount) => {
+        const nextEntity = { ...entity };
+        if (actType === 'buff_atk') { nextEntity.atk += amount; showCombatText(tId, `ATK+${amount}`, 'heal'); }
+        if (actType === 'debuff_atk') { nextEntity.atk = Math.max(0, nextEntity.atk - amount); showCombatText(tId, `ATK-${amount}`, 'damage'); }
+        if (actType === 'buff_def') { nextEntity.def += amount; showCombatText(tId, `DEF+${amount}`, 'heal'); }
+        if (actType === 'debuff_def') { nextEntity.def = Math.max(0, nextEntity.def - amount); showCombatText(tId, `DEF-${amount}`, 'damage'); }
+        return nextEntity;
+    };
+
     targets.forEach(tId => {
       if (finalAmounts[tId] === 'MISS') {
          showCombatText(tId, 'MISS', 'miss'); return;
@@ -396,7 +427,11 @@ export default function App() {
         } else if (action.actionType === 'heal') {
            newBoss.hp = Math.min(newBoss.maxHp, newBoss.hp + finalAmount);
            showCombatText('boss', `+${finalAmount}`, 'heal');
-        } else if (action.actionType === 'defend') newBoss.isDefending = true;
+        } else if (action.actionType === 'defend') {
+           newBoss.isDefending = true;
+        } else if (action.actionType.includes('buff')) {
+           newBoss = applyBuffDebuff(newBoss, 'boss', action.actionType, finalAmount);
+        }
       } else if (tId.startsWith('party_')) {
         const pId = parseInt(tId.split('_')[1]);
         newParty = newParty.map(p => {
@@ -410,6 +445,9 @@ export default function App() {
              return { ...p, hp: Math.min(p.maxHp, p.hp + finalAmount) };
           }
           if(action.actionType === 'defend') return { ...p, isDefending: true };
+          if(action.actionType.includes('buff')) {
+             return applyBuffDebuff(p, tId, action.actionType, finalAmount);
+          }
           return p;
         });
       }
@@ -452,6 +490,7 @@ export default function App() {
     
     let targets = [];
     if (resolvedTargetId === 'party_all') targets = party.filter(p => p.hp > 0).map(p => `party_${p.id}`);
+    else if (resolvedTargetId === 'enemy_all') targets = ['boss']; 
     else if (resolvedTargetId === 'party_random') {
        const alive = party.filter(p => p.hp > 0);
        targets = alive.length > 0 ? [`party_${alive[Math.floor(Math.random() * alive.length)].id}`] : ['boss']; 
@@ -460,10 +499,13 @@ export default function App() {
     setTimeout(() => {
       let finalAmounts = {};
       let phaseChangeTargets = [];
+      let forceBossInterrupt = false;
 
       targets.forEach(tId => {
         const acc = action.accuracy !== undefined ? action.accuracy : 100;
-        if ((Math.random() * 100) > acc && (action.actionType === 'damage' || action.actionType === 'heal')) {
+        
+        const isBeneficial = ['heal', 'revive', 'buff_atk', 'buff_def', 'defend', 'none'].includes(action.actionType);
+        if (!isBeneficial && (Math.random() * 100) > acc) {
            finalAmounts[tId] = 'MISS'; return;
         }
 
@@ -487,24 +529,34 @@ export default function App() {
            const variance = globalRules.damageVariance / 100;
            fAmt = Math.floor(baseAmount * ((1 - variance) + Math.random() * (variance * 2)));
         }
+        else if (action.actionType.includes('buff')) {
+           fAmt = baseAmount;
+           triggerEffect(tId, action.actionType.startsWith('buff') ? 'flash' : 'hurt', 0.5);
+        }
+        
         finalAmounts[tId] = fAmt;
 
-        const oldHp = getEntityAttr(tId, 'hp');
-        const maxHp = getEntityAttr(tId, 'maxHp');
-        const oldPhase = getEntityAttr(tId, 'phase') || 1;
-        const newHp = action.actionType === 'damage' ? Math.max(0, oldHp - fAmt) : Math.min(maxHp, oldHp + fAmt);
-        
-        let threshold, transType;
-        if (tId === 'boss') {
-           threshold = boss.media2Threshold; transType = boss.transitionType || 'none';
-        } else {
-           const p = party.find(x => x.id === parseInt(tId.split('_')[1]));
-           threshold = p.damagedThreshold; transType = p.transitionType || 'none';
-        }
+        if (['damage', 'heal', 'revive'].includes(action.actionType)) {
+            const oldHp = getEntityAttr(tId, 'hp');
+            const maxHp = getEntityAttr(tId, 'maxHp');
+            const oldPhase = getEntityAttr(tId, 'phase') || 1;
+            const newHp = action.actionType === 'damage' ? Math.max(0, oldHp - fAmt) : Math.min(maxHp, oldHp + fAmt);
+            
+            let threshold, transType;
+            if (tId === 'boss') {
+               threshold = boss.media2Threshold; transType = boss.transitionType || 'none';
+            } else {
+               const p = party.find(x => x.id === parseInt(tId.split('_')[1]));
+               threshold = p.damagedThreshold; transType = p.transitionType || 'none';
+            }
 
-        const newPhase = (newHp / maxHp) * 100 <= threshold ? 2 : 1;
-        if (oldPhase !== newPhase && transType !== 'none') {
-            phaseChangeTargets.push({ id: tId, type: transType, newPhase });
+            const newPhase = (newHp / maxHp) * 100 <= threshold ? 2 : 1;
+            if (oldPhase !== newPhase && transType !== 'none') {
+                phaseChangeTargets.push({ id: tId, type: transType, newPhase });
+            }
+            if (tId === 'boss' && oldPhase === 1 && newPhase === 2 && boss.interruptAtPhase2 && battleState.phase === 'player') {
+                forceBossInterrupt = true;
+            }
         }
       });
 
@@ -522,18 +574,18 @@ export default function App() {
 
           setTimeout(() => {
               const cont = commitStateUpdates(action, actorId, targets, finalAmounts);
-              if(cont) setTimeout(() => { setPhaseTransitions({}); advanceTurn(); }, 400 + (action.duration * 1000));
+              if(cont) setTimeout(() => { setPhaseTransitions({}); advanceTurn(forceBossInterrupt); }, 400 + (action.duration * 1000));
           }, 400); 
       } else {
           const cont = commitStateUpdates(action, actorId, targets, finalAmounts);
-          if(cont) setTimeout(advanceTurn, (action.duration * 1000) || 1000);
+          if(cont) setTimeout(() => advanceTurn(forceBossInterrupt), (action.duration * 1000) || 1000);
       }
 
     }, 400);
   };
 
   useEffect(() => {
-    if (activeTurnEntity === 'boss' && !isProcessingAction && boss.hp > 0) {
+    if (battleState.phase === 'boss' && !isProcessingAction && boss.hp > 0) {
       setIsProcessingAction(true);
       setGlobalMessage("Boss 行动中...");
       
@@ -549,9 +601,7 @@ export default function App() {
         executeAction(chosenAction, chosenAction.target, 'boss');
       }, 1500);
     }
-  }, [activeTurnEntity, boss.hp, isProcessingAction]);
-
-  const [targetingAction, setTargetingAction] = useState(null);
+  }, [battleState.phase, battleState.actionCount, boss.hp, isProcessingAction]);
 
   const handlePlayerMenuClick = (item) => {
     if (isProcessingAction) return;
@@ -561,7 +611,7 @@ export default function App() {
         return; 
     }
 
-    const actor = party.find(p => `party_${p.id}` === activeTurnEntity);
+    const actor = party.find(p => p.id === battleState.activePartyId);
     if (actor && item.mpCost > actor.mp) {
        setGlobalMessage(`${globalRules.mpLabel} 不足`);
        setTimeout(() => setGlobalMessage(""), 1000);
@@ -576,6 +626,8 @@ export default function App() {
     
     let resolvedTarget = item.target;
     if (item.target === 'self') resolvedTarget = activeTurnEntity;
+    if (item.target === 'enemy_all') resolvedTarget = 'enemy_all'; 
+    
     executeAction(item, resolvedTarget, activeTurnEntity);
   };
 
@@ -614,13 +666,20 @@ export default function App() {
   };
 
   // --- Mutators ---
-  const updateMenuData = (charId, category, index, field, value) => {
-    setParty(party.map(p => {
-        if (p.id !== charId) return p;
-        const newCategory = [...p.menus[category]];
-        newCategory[index] = { ...newCategory[index], [field]: value };
-        return { ...p, menus: { ...p.menus, [category]: newCategory } };
-    }));
+  const updateEntityRules = (type, charId, ruleType, index, field, value) => {
+    const targetKey = ruleType === 'dialogue' ? 'dialogueRules' : 'aiRules';
+    if (type === 'boss') {
+       const newRules = [...boss[targetKey]];
+       newRules[index] = { ...newRules[index], [field]: value };
+       setBoss({ ...boss, [targetKey]: newRules });
+    } else {
+       setParty(party.map(p => {
+          if(p.id !== charId) return p;
+          const newRules = [...(p[targetKey]||[])];
+          newRules[index] = { ...newRules[index], [field]: value };
+          return { ...p, [targetKey]: newRules };
+       }));
+    }
   };
   
   const addMenuItem = () => {
@@ -641,21 +700,6 @@ export default function App() {
     const sourceMenus = party.find(p => p.id === sourceCharId).menus;
     setParty(party.map(p => p.id === editingMenuCharId ? { ...p, menus: JSON.parse(JSON.stringify(sourceMenus)) } : p));
   };
-
-  const updateEntityRules = (type, charId, index, field, value) => {
-    if (type === 'boss') {
-       const newRules = [...boss[field.includes('text') || field.includes('duration') ? 'dialogueRules' : 'aiRules']];
-       newRules[index] = { ...newRules[index], [field]: value };
-       setBoss({ ...boss, [field.includes('text') || field.includes('duration') ? 'dialogueRules' : 'aiRules']: newRules });
-    } else {
-       setParty(party.map(p => {
-          if(p.id !== charId) return p;
-          const newRules = [...(p.dialogueRules||[])];
-          newRules[index] = { ...newRules[index], [field]: value };
-          return { ...p, dialogueRules: newRules };
-       }));
-    }
-  };
   
   const addRule = (type, charId, ruleType) => {
     const newRule = ruleType === 'dialogue' 
@@ -672,13 +716,9 @@ export default function App() {
     } else setParty(party.map(p => p.id === charId ? { ...p, dialogueRules: p.dialogueRules.filter((_,i)=>i!==index) } : p));
   };
 
-  const updateTurnStep = (index, value) => { const newChain = [...turnChain]; newChain[index] = value; setTurnChain(newChain); };
-  const removeTurnStep = (index) => { if(turnChain.length <= 1) return; setTurnChain(turnChain.filter((_, i) => i !== index)); if(currentTurnIdx >= turnChain.length - 1) setCurrentTurnIdx(0); };
-  const addTurnStep = () => setTurnChain([...turnChain, 'party_1']);
-
   // --- Snapshot IO ---
   const handleExportJson = () => {
-    const data = { bgMedia, effects, title, globalRules, boss, party, turnChain };
+    const data = { bgMedia, effects, title, globalRules, turnSettings, boss, party };
     const jsonStr = JSON.stringify(data);
     const blob = new Blob([jsonStr], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -702,9 +742,9 @@ export default function App() {
         if(data.effects) setEffects(data.effects);
         if(data.title) setTitle(data.title);
         if(data.globalRules) setGlobalRules({ hpLabel: 'HP', mpLabel: 'MP', ...data.globalRules });
-        if(data.boss) setBoss({ media2Threshold: 50, transitionType: 'none', fx: { glitch: false, invert: false, sepia: false }, ...data.boss, phase: 1, aiRules: (data.boss.aiRules||[]).map(r=>({...r, triggered:false})), dialogueRules: (data.boss.dialogueRules||[]).map(r=>({...r, triggered:false})) });
+        if(data.turnSettings) setTurnSettings({ playerActions: 2, bossActions: 1, ...data.turnSettings });
+        if(data.boss) setBoss({ media2Threshold: 50, transitionType: 'none', fx: { glitch: false, invert: false, sepia: false }, interruptAtPhase2: true, ...data.boss, phase: 1, aiRules: (data.boss.aiRules||[]).map(r=>({...r, triggered:false})), dialogueRules: (data.boss.dialogueRules||[]).map(r=>({...r, triggered:false})) });
         if(data.party) setParty(data.party.map(p => ({ damagedThreshold: 50, mediaDamaged: null, transitionType: 'none', fx: { glitch: false, invert: false, sepia: false }, ...p, phase: 1, dialogueRules: (p.dialogueRules||[]).map(r=>({...r, triggered:false})) })));
-        if(data.turnChain) setTurnChain(data.turnChain);
         resetBattle();
       } catch (err) { alert("文件解析失败"); }
     };
@@ -783,12 +823,12 @@ export default function App() {
               {targetingAction && !isProcessingAction && <button onClick={() => setTargetingAction(null)} className="bg-gray-800 border border-gray-600 text-gray-300 px-3 py-1 text-sm rounded hover:bg-gray-700">取消</button>}
             </div>
             
-            <div className={`rpg-box h-[50px] px-3 flex items-center justify-between gap-3 bg-[#111] border-[#555] min-w-[200px] ${activeTurnEntity==='boss'?'border-red-600 bg-red-950/30':''}`}>
+            <div className={`rpg-box h-[50px] px-3 flex items-center justify-between gap-3 bg-[#111] border-[#555] min-w-[200px] ${battleState.phase==='boss'?'border-red-600 bg-red-950/30':''}`}>
                <button onClick={resetBattle} className="text-gray-400 hover:text-white hover:bg-gray-800 p-1 px-2 rounded text-sm transition-colors border border-gray-700">重置战斗</button>
                <div className="w-[1px] h-3/4 bg-gray-700 mx-1"></div>
                <div className="text-center flex-1">
-                 <div className="text-xs text-yellow-500 leading-tight">当前回合</div>
-                 <div className={`text-md tracking-widest ${activeTurnEntity==='boss'?'text-red-400 font-bold':'text-green-400'}`}>{getEntityName(activeTurnEntity)}</div>
+                 <div className="text-xs text-yellow-500 leading-tight">{battleState.phase === 'player' ? '玩家行动阶段' : '敌方行动阶段'}</div>
+                 <div className={`text-md tracking-widest ${battleState.phase==='boss'?'text-red-400 font-bold':'text-green-400'}`}>剩余 {battleState.phase === 'player' ? turnSettings.playerActions - battleState.actionCount : turnSettings.bossActions - battleState.actionCount} 次</div>
                </div>
             </div>
           </div>
@@ -797,7 +837,8 @@ export default function App() {
             <div className="flex-1 grid grid-cols-4 gap-2 min-w-0">
               {party.map((p) => {
                 const entityId = `party_${p.id}`;
-                const isMyTurn = activeTurnEntity === entityId;
+                const isSelected = isPlayerTurn && battleState.activePartyId === p.id;
+                const canBeSelected = isPlayerTurn && !targetingAction && p.hp > 0;
                 const currentAnim = tempEffects[entityId] || getBaseAnimClass(p.anim);
                 const isTargetable = targetingAction?.target === 'manual_party' || targetingAction?.target === 'manual_any';
                 const isDead = p.hp <= 0;
@@ -807,14 +848,18 @@ export default function App() {
                 return (
                   <div 
                     key={p.id} 
-                    className={`rpg-box flex flex-col p-2 h-full transition-all duration-300 ${isMyTurn && !targetingAction && !isDead ? 'rpg-box-active transform -translate-y-2' : ''} ${isTargetable ? 'targetable-ally' : ''} ${isDead ? 'is-dead' : ''}`}
+                    className={`rpg-box flex flex-col p-2 h-full transition-all duration-300 ${isSelected ? 'rpg-box-active transform -translate-y-2' : ''} ${canBeSelected && !isSelected ? 'cursor-pointer hover:border-yellow-200' : ''} ${isTargetable ? 'targetable-ally' : ''} ${isDead ? 'is-dead' : ''}`}
                     onClick={() => {
-                      if (targetingAction?.actionType === 'revive') { handleEntityClick(entityId); }
-                      else if (!isDead) { handleEntityClick(entityId); }
+                      if (targetingAction) {
+                          if (targetingAction.actionType === 'revive' || !isDead) { handleEntityClick(entityId); }
+                      } else if (canBeSelected) {
+                          setBattleState(s => ({ ...s, activePartyId: p.id }));
+                          setCurrentMenuId('main');
+                      }
                     }}
                   >
                     <div className="text-center text-sm lg:text-lg border-b-2 border-[#555] pb-1 mb-1 tracking-widest relative">
-                      {isMyTurn && !isDead && <span className="absolute -left-1 top-0 text-yellow-400 text-xs indicator-bounce">▼</span>}
+                      {isSelected && !isDead && <span className="absolute -left-1 top-0 text-yellow-400 text-xs indicator-bounce">▼</span>}
                       {p.name}
                     </div>
                     
@@ -843,12 +888,12 @@ export default function App() {
             </div>
 
             <div className={`rpg-box w-[160px] lg:w-[200px] h-full p-3 lg:p-4 flex flex-col gap-2 tracking-widest overflow-y-auto transition-opacity duration-300 ${isPlayerTurn && !targetingAction ? 'opacity-100' : 'opacity-30 pointer-events-none'}`}>
-              {activeTurnEntity === 'boss' ? (
+              {battleState.phase === 'boss' ? (
                  <div className="h-full flex items-center justify-center text-red-500 text-xl animate-pulse text-center">系统解析中</div>
               ) : (
                 currentMenuItems.map((cmd) => {
                   const isHovered = hoveredItemId === cmd.id;
-                  const canAfford = !cmd.mpCost || party.find(p => `party_${p.id}` === activeTurnEntity)?.mp >= cmd.mpCost;
+                  const canAfford = !cmd.mpCost || party.find(p => p.id === battleState.activePartyId)?.mp >= cmd.mpCost;
                   return (
                     <div key={cmd.id} className={`relative flex items-center cursor-pointer select-none group py-1 ${!canAfford ? 'opacity-50' : ''}`} onMouseEnter={() => setHoveredItemId(cmd.id)} onMouseLeave={() => setHoveredItemId(null)} onClick={() => canAfford && handlePlayerMenuClick(cmd)}>
                       <div className={`absolute -left-1 lg:-left-2 text-[#eab308] text-sm lg:text-lg transition-opacity ${isHovered ? 'opacity-100' : 'opacity-0'}`}>▶</div>
@@ -949,6 +994,12 @@ export default function App() {
                           <span className="text-gray-500">形态切换阈值: {globalRules.hpLabel} 低于</span>
                           <input type="number" value={boss.media2Threshold} onChange={(e)=>setBoss({...boss, media2Threshold:Number(e.target.value)})} className="w-10 bg-gray-800 border border-gray-600 text-white text-center"/> %
                         </div>
+                        <div className="flex items-center gap-2 mt-1 text-[10px]">
+                          <label className="flex items-center gap-1 cursor-pointer text-red-400">
+                             <input type="checkbox" checked={boss.interruptAtPhase2} onChange={(e)=>setBoss({...boss, interruptAtPhase2: e.target.checked})} className="accent-red-500" />
+                             进二阶段时强制中断玩家并立刻行动
+                          </label>
+                        </div>
                       </div>
                       
                       <div className="mt-4 border border-red-900 bg-red-950/20 p-2 rounded space-y-2">
@@ -958,28 +1009,36 @@ export default function App() {
                               <button onClick={() => removeRule('boss', null, 'ai', idx)} className="absolute top-1 right-1 text-red-500 hover:text-red-300"><Trash2 size={12}/></button>
                               <div className="flex gap-1 mb-1 items-center pr-4">
                                 <span className="text-gray-500">触发条件:</span>
-                                <select value={rule.condition} onChange={(e)=>updateEntityRules('boss', null, idx, 'condition', e.target.value)} className="bg-gray-800 text-white outline-none p-1 border border-gray-600 flex-1">
+                                <select value={rule.condition} onChange={(e)=>updateEntityRules('boss', null, 'ai', idx, 'condition', e.target.value)} className="bg-gray-800 text-white outline-none p-1 border border-gray-600 flex-1">
                                   <option value="hp_above">{globalRules.hpLabel} % 高于</option><option value="hp_below">{globalRules.hpLabel} % 低于</option><option value="always">无条件执行</option>
                                 </select>
-                                {rule.condition !== 'always' && <input type="number" value={rule.threshold} onChange={(e)=>updateEntityRules('boss', null, idx, 'threshold', Number(e.target.value))} className="w-10 bg-gray-800 text-white p-1 border border-gray-600 text-center"/>}
+                                {rule.condition !== 'always' && <input type="number" value={rule.threshold} onChange={(e)=>updateEntityRules('boss', null, 'ai', idx, 'threshold', Number(e.target.value))} className="w-10 bg-gray-800 text-white p-1 border border-gray-600 text-center"/>}
                               </div>
                               <div className="flex gap-1 mb-1 items-center">
                                 <span className="text-gray-500">技能名:</span>
-                                <input type="text" value={rule.text} onChange={(e)=>updateEntityRules('boss', null, idx, 'text', e.target.value)} className="w-16 bg-gray-800 text-white p-1 border border-gray-600"/>
-                                <select value={rule.actionType} onChange={(e)=>updateEntityRules('boss', null, idx, 'actionType', e.target.value)} className="bg-gray-800 text-white outline-none p-1 border border-gray-600">
-                                  <option value="damage">攻击</option><option value="heal">回复</option><option value="defend">防御</option>
+                                <input type="text" value={rule.text} onChange={(e)=>updateEntityRules('boss', null, 'ai', idx, 'text', e.target.value)} className="w-16 bg-gray-800 text-white p-1 border border-gray-600"/>
+                                <select value={rule.actionType} onChange={(e)=>updateEntityRules('boss', null, 'ai', idx, 'actionType', e.target.value)} className="bg-gray-800 text-white outline-none p-1 border border-gray-600">
+                                  <option value="damage">攻击 (Damage)</option>
+                                  <option value="heal">回复 (Heal)</option>
+                                  <option value="buff_atk">提升攻击力</option>
+                                  <option value="debuff_atk">降低攻击力</option>
+                                  <option value="buff_def">提升防御力</option>
+                                  <option value="debuff_def">降低防御力</option>
+                                  <option value="defend">防御</option>
                                 </select>
-                                <span className="text-gray-500">威力/数值:</span>
-                                <input type="number" value={rule.value} onChange={(e)=>updateEntityRules('boss', null, idx, 'value', Number(e.target.value))} className="w-12 bg-gray-800 text-white p-1 border border-gray-600 text-center"/>
-                                <span className="text-gray-500">命中率:</span>
-                                <input type="number" value={rule.accuracy} onChange={(e)=>updateEntityRules('boss', null, idx, 'accuracy', Number(e.target.value))} className="w-10 bg-gray-800 text-white p-1 border border-gray-600 text-center"/>
+                                <span className="text-gray-500 ml-1">数值:</span>
+                                <input type="number" value={rule.value} onChange={(e)=>updateEntityRules('boss', null, 'ai', idx, 'value', Number(e.target.value))} className="w-12 bg-gray-800 text-white p-1 border border-gray-600 text-center"/>
+                                <span className="text-gray-500">命中:</span>
+                                <input type="number" value={rule.accuracy} onChange={(e)=>updateEntityRules('boss', null, 'ai', idx, 'accuracy', Number(e.target.value))} className="w-10 bg-gray-800 text-white p-1 border border-gray-600 text-center"/>
                               </div>
                               <div className="flex gap-1 items-center">
                                 <span className="text-gray-500">目标选取:</span>
-                                <select value={rule.target} onChange={(e)=>updateEntityRules('boss', null, idx, 'target', e.target.value)} className="flex-1 bg-gray-800 text-white outline-none p-1 border border-gray-600">
-                                  <option value="party_random">随机单体</option><option value="party_all">敌方全体</option><option value="boss">自身</option>
+                                <select value={rule.target} onChange={(e)=>updateEntityRules('boss', null, 'ai', idx, 'target', e.target.value)} className="flex-1 bg-gray-800 text-white outline-none p-1 border border-gray-600">
+                                  <option value="party_random">随机我方单体</option>
+                                  <option value="party_all">我方全体</option>
+                                  <option value="boss">自身 (Boss)</option>
                                 </select>
-                                <select value={rule.effect} onChange={(e)=>updateEntityRules('boss', null, idx, 'effect', e.target.value)} className="flex-1 bg-gray-800 text-white outline-none p-1 border border-gray-600">
+                                <select value={rule.effect} onChange={(e)=>updateEntityRules('boss', null, 'ai', idx, 'effect', e.target.value)} className="flex-1 bg-gray-800 text-white outline-none p-1 border border-gray-600">
                                   <option value="lunge-down">下砸</option><option value="flash">闪烁</option><option value="shake">震动</option><option value="spin">旋转</option>
                                 </select>
                               </div>
@@ -995,16 +1054,16 @@ export default function App() {
                               <button onClick={() => removeRule('boss', null, 'dialogue', idx)} className="absolute top-1 right-1 text-red-500 hover:text-red-300"><Trash2 size={12}/></button>
                               <div className="flex gap-1 mb-1 items-center pr-4">
                                 <span className="text-gray-500">触发条件:</span>
-                                <select value={rule.condition} onChange={(e)=>updateEntityRules('boss', null, idx, 'condition', e.target.value)} className="bg-gray-800 text-white outline-none p-1 border border-gray-600 flex-1">
+                                <select value={rule.condition} onChange={(e)=>updateEntityRules('boss', null, 'dialogue', idx, 'condition', e.target.value)} className="bg-gray-800 text-white outline-none p-1 border border-gray-600 flex-1">
                                   <option value="hp_above">{globalRules.hpLabel} % 高于</option><option value="hp_below">{globalRules.hpLabel} % 低于</option>
                                 </select>
-                                <input type="number" value={rule.threshold} onChange={(e)=>updateEntityRules('boss', null, idx, 'threshold', Number(e.target.value))} className="w-10 bg-gray-800 text-white p-1 border border-gray-600 text-center"/>
+                                <input type="number" value={rule.threshold} onChange={(e)=>updateEntityRules('boss', null, 'dialogue', idx, 'threshold', Number(e.target.value))} className="w-10 bg-gray-800 text-white p-1 border border-gray-600 text-center"/>
                               </div>
                               <div className="flex gap-1 items-center">
                                 <span className="text-gray-500">对话文本:</span>
-                                <input type="text" value={rule.text} onChange={(e)=>updateEntityRules('boss', null, idx, 'text', e.target.value)} className="flex-1 bg-gray-800 text-white p-1 border border-gray-600"/>
+                                <input type="text" value={rule.text} onChange={(e)=>updateEntityRules('boss', null, 'dialogue', idx, 'text', e.target.value)} className="flex-1 bg-gray-800 text-white p-1 border border-gray-600"/>
                                 <span className="text-gray-500">持续时间(秒):</span>
-                                <input type="number" value={rule.duration} onChange={(e)=>updateEntityRules('boss', null, idx, 'duration', Number(e.target.value))} className="w-10 bg-gray-800 text-white p-1 border border-gray-600 text-center"/>
+                                <input type="number" value={rule.duration} onChange={(e)=>updateEntityRules('boss', null, 'dialogue', idx, 'duration', Number(e.target.value))} className="w-10 bg-gray-800 text-white p-1 border border-gray-600 text-center"/>
                               </div>
                            </div>
                         ))}
@@ -1059,16 +1118,16 @@ export default function App() {
                                 <button onClick={() => removeRule('party', p.id, 'dialogue', idx)} className="absolute top-1 right-1 text-red-500 hover:text-red-300"><Trash2 size={12}/></button>
                                 <div className="flex gap-1 mb-1 items-center pr-4">
                                   <span className="text-gray-500">触发条件:</span>
-                                  <select value={rule.condition} onChange={(e)=>updateEntityRules('party', p.id, idx, 'condition', e.target.value)} className="bg-gray-800 text-white outline-none p-1 border border-gray-600 flex-1">
+                                  <select value={rule.condition} onChange={(e)=>updateEntityRules('party', p.id, 'dialogue', idx, 'condition', e.target.value)} className="bg-gray-800 text-white outline-none p-1 border border-gray-600 flex-1">
                                     <option value="hp_above">{globalRules.hpLabel} % 高于</option><option value="hp_below">{globalRules.hpLabel} % 低于</option>
                                   </select>
-                                  <input type="number" value={rule.threshold} onChange={(e)=>updateEntityRules('party', p.id, idx, 'threshold', Number(e.target.value))} className="w-10 bg-gray-800 text-white p-1 border border-gray-600 text-center"/>
+                                  <input type="number" value={rule.threshold} onChange={(e)=>updateEntityRules('party', p.id, 'dialogue', idx, 'threshold', Number(e.target.value))} className="w-10 bg-gray-800 text-white p-1 border border-gray-600 text-center"/>
                                 </div>
                                 <div className="flex gap-1 items-center">
                                   <span className="text-gray-500">对话文本:</span>
-                                  <input type="text" value={rule.text} onChange={(e)=>updateEntityRules('party', p.id, idx, 'text', e.target.value)} className="flex-1 bg-gray-800 text-white p-1 border border-gray-600"/>
+                                  <input type="text" value={rule.text} onChange={(e)=>updateEntityRules('party', p.id, 'dialogue', idx, 'text', e.target.value)} className="flex-1 bg-gray-800 text-white p-1 border border-gray-600"/>
                                   <span className="text-gray-500">持续时间(秒):</span>
-                                  <input type="number" value={rule.duration} onChange={(e)=>updateEntityRules('party', p.id, idx, 'duration', Number(e.target.value))} className="w-10 bg-gray-800 text-white p-1 border border-gray-600 text-center"/>
+                                  <input type="number" value={rule.duration} onChange={(e)=>updateEntityRules('party', p.id, 'dialogue', idx, 'duration', Number(e.target.value))} className="w-10 bg-gray-800 text-white p-1 border border-gray-600 text-center"/>
                                 </div>
                              </div>
                            ))}
@@ -1083,23 +1142,21 @@ export default function App() {
                   <div className="space-y-4">
                     
                     <div className="space-y-2">
-                      <h3 className="text-white border-b border-gray-700 pb-1 font-bold text-yellow-400">回合行动顺序</h3>
-                      <div className="bg-gray-800 p-2 rounded border border-gray-700 space-y-1">
-                        {turnChain.map((actor, idx) => (
-                          <div key={idx} className="flex gap-1 items-center bg-gray-900 p-1 rounded">
-                            <span className="text-[10px] text-gray-500 w-4 text-center">{idx+1}.</span>
-                            <select value={actor} onChange={(e)=>updateTurnStep(idx, e.target.value)} className="flex-1 bg-transparent text-white text-xs outline-none">
-                               <option value="party_1">角色 1</option><option value="party_2">角色 2</option><option value="party_3">角色 3</option><option value="party_4">角色 4</option><option value="boss">Boss</option>
-                            </select>
-                            <button onClick={()=>removeTurnStep(idx)} className="text-red-500 hover:text-red-400 px-2 text-sm">×</button>
-                          </div>
-                        ))}
-                        <button onClick={addTurnStep} className="w-full mt-2 py-1 border border-dashed border-gray-500 text-gray-400 hover:text-white hover:border-white text-xs">添加行动顺序</button>
+                      <h3 className="text-white border-b border-gray-700 pb-1 font-bold text-yellow-400">战斗阶段与行动数</h3>
+                      <div className="bg-gray-800 p-2 rounded border border-gray-700 grid grid-cols-2 gap-2 text-xs">
+                         <div className="flex justify-between items-center bg-gray-900 px-2 py-1 rounded border border-gray-600">
+                           <span className="text-gray-400">玩家阶段行动数</span>
+                           <input type="number" value={turnSettings.playerActions} onChange={e => setTurnSettings({...turnSettings, playerActions: Number(e.target.value)})} className="w-10 bg-transparent text-white text-center outline-none" min="1"/>
+                         </div>
+                         <div className="flex justify-between items-center bg-gray-900 px-2 py-1 rounded border border-gray-600">
+                           <span className="text-gray-400">Boss阶段行动数</span>
+                           <input type="number" value={turnSettings.bossActions} onChange={e => setTurnSettings({...turnSettings, bossActions: Number(e.target.value)})} className="w-10 bg-transparent text-white text-center outline-none" min="1"/>
+                         </div>
                       </div>
                     </div>
 
                     <div className="bg-gray-800 p-2 rounded border border-gray-700 mb-2">
-                        <label className="text-xs text-gray-400 font-bold block mb-2">当前编辑角色</label>
+                        <label className="text-xs text-gray-400 font-bold block mb-2">当前编辑角色菜单</label>
                         <div className="flex gap-1">
                            {party.map(p => (
                              <button key={p.id} onClick={()=>setEditingMenuCharId(p.id)} className={`flex-1 py-1 text-[11px] rounded transition-colors ${editingMenuCharId === p.id ? 'bg-gray-600 text-white' : 'bg-gray-900 text-gray-400 hover:bg-gray-700 border border-gray-600'}`}>
@@ -1136,6 +1193,10 @@ export default function App() {
                               <select value={item.actionType} onChange={(e) => updateMenuData(editingMenuCharId, editingMenuId, index, 'actionType', e.target.value)} className="bg-gray-800 text-white p-1 border border-gray-600 outline-none">
                                 <option value="damage">造成伤害</option>
                                 <option value="heal">恢复 HP</option>
+                                <option value="buff_atk">提升攻击力</option>
+                                <option value="debuff_atk">降低攻击力</option>
+                                <option value="buff_def">提升防御力</option>
+                                <option value="debuff_def">降低防御力</option>
                                 <option value="revive">复活队友</option>
                                 <option value="defend">防御</option>
                                 <option value="none">仅返回或打开子菜单</option>
@@ -1159,9 +1220,11 @@ export default function App() {
                             <div>
                               <span className="text-gray-400 block mb-1">目标选取</span>
                               <select value={item.target} onChange={(e) => updateMenuData(editingMenuCharId, editingMenuId, index, 'target', e.target.value)} className="w-full bg-gray-800 text-white p-1 border border-gray-600 outline-none">
-                                <option value="manual_enemy">手动选择敌方</option>
-                                <option value="manual_party">手动选择队伍成员</option>
-                                <option value="self">自身</option>
+                                <option value="manual_enemy">手动选择敌方单体</option>
+                                <option value="enemy_all">对敌方全体</option>
+                                <option value="manual_party">手动选择我方单体</option>
+                                <option value="party_all">对我方全体</option>
+                                <option value="self">仅自身</option>
                                 <option value="none">无需选择</option>
                               </select>
                             </div>
